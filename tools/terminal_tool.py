@@ -1616,6 +1616,29 @@ TERMINAL_SCHEMA = {
 }
 
 
+def _messaging_background_default_enabled() -> bool:
+    """Whether an undeclared terminal call should default to background.
+
+    On a human messaging surface a long foreground command blocks the chat thread:
+    the human waits on the reply. There the default flips to background plus a
+    completion notification; foreground stays available with an explicit
+    ``background=false``.
+
+    Sessions that cannot deliver a completion later (cron, kanban workers) keep the
+    foreground default, so their results still arrive inline.
+    """
+    try:
+        from gateway.session_context import async_delivery_supported, session_is_messaging_surface
+    except Exception:
+        return False
+    try:
+        if not session_is_messaging_surface():
+            return False
+        return bool(async_delivery_supported())
+    except Exception:
+        return False
+
+
 def _handle_terminal(args, **kw):
     from agent.terminal_approval_batch import validate_prepared_terminal
     validate_prepared_terminal(args)
@@ -1636,6 +1659,13 @@ def _handle_terminal(args, **kw):
     # shape) send `heartbeat=60` on ordinary commands — refusing it produced
     # identical-call retry loops (46 subagent sessions, 4 refusals each, 38 of
     # which never ran a single command), so it is normalized away instead.
+    # A human waits on the chat thread: default an undeclared terminal call to
+    # background + completion notification there. Foreground stays available with
+    # an explicit background=false.
+    if "background" not in args and not args.get("pty", False) and _messaging_background_default_enabled():
+        args = dict(args)
+        args["background"] = True
+        args.setdefault("notify_on_complete", True)
     notify = args.get("notify")
     notify_on_complete = args.get("notify_on_complete", False)
     watch_patterns = args.get("watch_patterns")
